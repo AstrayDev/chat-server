@@ -1,0 +1,18 @@
+{
+    "files.associations": {
+        "netdb.h": "c",
+        "socket.h": "c",
+        "inet.h": "c",
+        "server.h": "c",
+        "array": "c",
+        "buffer": "c",
+        "internet": "c",
+        "socket": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "stdlib.h": "c",
+        "poll.h": "c",
+        "helpers.h": "c",
+        "unistd.h": "c"
+    }
+}
