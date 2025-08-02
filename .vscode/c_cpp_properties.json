@@ -3,9 +3,12 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/include"
             ],
-            "defines": ["_GNU_SOURCE"],
+            "defines": [
+                "_GNU_SOURCE"
+            ],
             "cStandard": "c23",
             "cppStandard": "gnu++17",
             "intelliSenseMode": "linux-gcc-x64"

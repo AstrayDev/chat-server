@@ -6,16 +6,17 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include "helpers.h"
+#include "serialize.h"
 
-char *get_input()
+int get_input(char *input)
 {
     int c, length = 0, capacity = 10;
-    char *input = malloc(capacity), *tmp = NULL;
+    char *tmp = NULL;
 
     if (!input)
     {
         printf("Failed input allocation");
-        return NULL;
+        return -1;
     }
 
     while ((c = fgetc(stdin)) != '\n' && c != EOF)
@@ -39,10 +40,14 @@ char *get_input()
         input[length++] = c;
     }
 
-    input[length++] = '\n';
     input[length] = '\0';
 
-    return input;
+    if (strlen(input) > MAX_TEXT_LENGTH)
+    {
+        return -1;
+    }
+
+    return 0;
 }
 
 int main()
@@ -95,24 +100,34 @@ int main()
 
     freeaddrinfo(addressinfo);
 
-    char *input = NULL;
+    char *input = malloc(10);
 
     for (;;)
     {
-        if ((input = get_input()) == NULL)
+        if (get_input(input) == -1)
         {
             printf("ERRRRR");
         }
-        
-        struct chat_data chat_info = {.length = strlen(input), .data = input};
+
+        struct chat_data chat_info = {.length = strlen(input) + 1, .data = input};
 
         printf("char length: %d\n", chat_info.length);
-        sendall(sockfd, (&chat_info) + sizeof(uint16_t), chat_info.length, 0);
+
+        size_t struct_size = sizeof(uint16_t) + chat_info.length;
+
+        char *buffer_send = malloc(struct_size);
+
+        serialize_struct(&chat_info, buffer_send);
+
+        sendall(sockfd, buffer_send, struct_size, 0);
 
         int nbytes = 0;
-        char buffer[MAX_TEXT_LENGTH];
+        uint16_t length = 0;
+        char *buffer_recv = malloc(struct_size);
 
-        nbytes = recvall(sockfd, buffer, sizeof(buffer), 0);
+        nbytes = recvall(sockfd, &length, sizeof(uint16_t), 0);
+        memcpy(buffer_recv, &length, sizeof(length));
+        nbytes = recvall(sockfd, buffer_recv + sizeof(uint16_t), length, 0);
 
         if (nbytes <= 0)
         {
@@ -128,7 +143,15 @@ int main()
             }
         }
 
-        buffer[nbytes] = '\0';
-        printf("Client on socket %d said: %s\n", sockfd, buffer);
+        else
+        {
+            memset(&chat_info, 0, sizeof(struct chat_data));
+            deserialize_struct(&chat_info, buffer_recv);
+
+            printf("Client on socket %d said: %s\n", sockfd, chat_info.data);
+        }
+
+        free(buffer_send);
+        free(buffer_recv);
     }
 }

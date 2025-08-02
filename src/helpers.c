@@ -33,12 +33,12 @@ const char *get_address(void *addr, char *buffer, size_t len)
 
 int sendall(int fd, void *data, size_t data_len, int flags)
 {
-    int data_sent = 0;
+    size_t data_sent = 0;
 
     while (data_len > data_sent)
     {
         int sent = 0;
-        sent += send(fd, data + data_sent, data_len, flags);
+        sent = send(fd, data + data_sent, data_len, flags);
         data_sent += sent;
 
         if (data_sent <= 0)
@@ -55,7 +55,7 @@ int sendall(int fd, void *data, size_t data_len, int flags)
 
 int recvall(int fd, void *data, size_t data_len, int flags)
 {
-    int data_sent = 0;
+    size_t data_sent = 0;
 
     while (data_len > data_sent)
     {
