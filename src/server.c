@@ -78,7 +78,7 @@ void handle_new_connection(int listener, uint8_t *poll_size, uint8_t *fd_count, 
 
     if ((newfd = accept(listener, (struct sockaddr *)&client, &client_len)) != -1)
     {
-        if (fd_count >= poll_size)
+        if (*fd_count >= *poll_size)
         {
             *poll_size *= 2;
             *fds = realloc(*fds, sizeof(**fds) * (*poll_size));
@@ -96,9 +96,9 @@ void handle_new_connection(int listener, uint8_t *poll_size, uint8_t *fd_count, 
 
         (*fd_count)++;
 
-        char buffer[INET6_ADDRSTRLEN];
-        get_address(&client, buffer, client_len);
-        printf("New connection coming from address: %s\n", buffer);
+        char newIP[INET6_ADDRSTRLEN];
+        get_address(&client, newIP, client_len);
+        printf("New connection coming from address: %s\n", newIP);
     }
 }
 
@@ -106,19 +106,17 @@ void handle_client_data(int listener, struct pollfd *fds, uint8_t *fd_index, uin
 {
     int nbytes = 0;
     uint16_t length = 0;
-    
+
     nbytes = recvall(fds[*fd_index].fd, &length, sizeof(uint16_t), 0);
+    length = ntohs(length);
 
     size_t struct_size = sizeof(uint16_t) + length;
     char *buffer = malloc(struct_size);
-    struct chat_data *chat_info = malloc(sizeof(struct chat_data));
 
     memcpy(buffer, &length, sizeof(uint16_t));
     nbytes = recvall(fds[*fd_index].fd, buffer + sizeof(uint16_t), length, 0);
 
-    deserialize_struct(chat_info, buffer);
-
-    if (nbytes <= 0)
+    if (nbytes <= 1)
     {
         if (nbytes == 0)
         {
@@ -133,25 +131,21 @@ void handle_client_data(int listener, struct pollfd *fds, uint8_t *fd_index, uin
         close(fds[*fd_index].fd);
 
         fds[*fd_index] = fds[*fd_count - 1];
-
         (*fd_count)--;
-        // (*fd_index)--;
     }
 
     else
     {
-        printf("Recovered bytes from client: %d\n", nbytes);
-        // memcpy(buffer, chat_info->data, chat_info->length);
-        // buffer[nbytes] = '\0';
+        printf("Recovered bytes from client on socket %d: %d\n", fds[*fd_index].fd, nbytes);
+
         for (int i = 0; i < *fd_count; i++)
         {
             if (fds[i].fd != listener && fds[i].fd != fds[*fd_index].fd)
             {
-                serialize_struct(chat_info, buffer);
                 sendall(fds[i].fd, buffer, struct_size, 0);
             }
         }
-        printf("Client said: %s\n", chat_info->data);
+        printf("Client said: %s\n", buffer + sizeof(uint16_t));
     }
 }
 
@@ -159,7 +153,7 @@ void handle_connections(int listener, uint8_t *poll_size, uint8_t *fd_count, str
 {
     for (uint8_t i = 0; i < *fd_count; i++)
     {
-        if ((*fds)[i].revents & (POLLIN | POLLHUP))
+        if ((*fds)[i].revents & POLLIN)
         {
             if ((*fds)[i].fd == listener)
             {
@@ -177,7 +171,7 @@ void handle_connections(int listener, uint8_t *poll_size, uint8_t *fd_count, str
 int main()
 {
     uint8_t fd_count = 0;
-    uint8_t poll_size = 5;
+    uint8_t poll_size = 10;
     struct pollfd *fds = malloc(sizeof(*fds) * poll_size);
 
     int listener = init_listener();

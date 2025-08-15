@@ -18,6 +18,16 @@
                     "description": "Enable pretty-printing for gdb",
                     "text": "-enable-pretty-printing",
                     "ignoreFailures": true
+                },
+                {
+                    "description": "Enable thread debugging",
+                    "text": "set follow-fork-mode child",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Enable thread switching",
+                    "text": "set schedular-locking off",
+                    "ignoreFailures": true
                 }
             ]
         }

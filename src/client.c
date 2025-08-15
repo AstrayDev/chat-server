@@ -2,22 +2,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <signal.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include "helpers.h"
 #include "serialize.h"
 
-int get_input(char *input)
+struct thread_data
+{
+    int sockfd;
+    pthread_mutex_t mutex;
+    volatile sig_atomic_t running;
+    struct chat_data chat_info;
+};
+
+int get_input(char **input)
 {
     int c, length = 0, capacity = 10;
     char *tmp = NULL;
-
-    if (!input)
-    {
-        printf("Failed input allocation");
-        return -1;
-    }
 
     while ((c = fgetc(stdin)) != '\n' && c != EOF)
     {
@@ -26,28 +30,125 @@ int get_input(char *input)
         if (length >= capacity - 1)
         {
             capacity *= 2;
-            tmp = realloc(input, capacity);
+            tmp = realloc(*input, capacity);
 
-            if (!input)
+            if (!tmp)
             {
-                free(tmp);
-                return NULL;
+                return -1;
             }
 
-            input = tmp;
+            *input = tmp;
         }
 
-        input[length++] = c;
+        (*input)[length++] = c;
     }
 
-    input[length] = '\0';
+    (*input)[length] = '\0';
 
-    if (strlen(input) > MAX_TEXT_LENGTH)
+    if (strlen(*input) > MAX_TEXT_LENGTH)
     {
         return -1;
     }
 
     return 0;
+}
+
+void *send_msg(void *td)
+{
+    struct thread_data *t = (struct thread_data *)td;
+    char *input = malloc(10);
+
+    while (t->running)
+    {
+        if (get_input(&input) < 0)
+        {
+            printf("Couldn't get text input");
+        }
+
+        if (strcmp(input, "exit") == 0)
+        {
+            t->running = 0;
+            free(input);
+            pthread_exit(NULL);
+        }
+
+        pthread_mutex_lock(&t->mutex);
+
+        t->chat_info.length = strlen(input) + 1;
+        t->chat_info.data = input;
+
+        pthread_mutex_unlock(&t->mutex);
+
+        size_t struct_size = sizeof(uint16_t) + t->chat_info.length;
+
+        char *buffer_send = malloc(struct_size);
+        if (!buffer_send)
+        {
+            perror("buffer_send malloc");
+            free(input);
+            return NULL;
+        }
+
+        serialize_struct(&t->chat_info, buffer_send);
+        sendall(t->sockfd, buffer_send, struct_size, 0);
+
+        free(buffer_send);
+    }
+
+    return NULL;
+}
+
+void *recv_msg(void *td)
+{
+    struct thread_data *t = (struct thread_data *)td;
+
+    int nbytes = 0;
+    uint16_t length = 0;
+
+    size_t struct_size = sizeof(uint16_t) + t->chat_info.length;
+    char *buffer_recv = malloc(struct_size);
+
+    while (t->running)
+    {
+        nbytes = recvall(t->sockfd, &length, sizeof(uint16_t), 0);
+        memcpy(buffer_recv, &length, sizeof(length));
+        nbytes = recvall(t->sockfd, buffer_recv + sizeof(uint16_t), length, 0);
+
+        if (nbytes <= 0)
+        {
+            if (nbytes == 0)
+            {
+                printf("Connection with server closed\n");
+                return NULL;
+            }
+
+            else
+            {
+                perror("recv");
+                return NULL;
+            }
+        }
+
+        else
+        {
+            pthread_mutex_lock(&t->mutex);
+
+            memset(&t->chat_info, 0, sizeof(struct chat_data));
+            deserialize_struct(&t->chat_info, buffer_recv);
+
+            pthread_mutex_unlock(&t->mutex);
+
+            if (strcmp(t->chat_info.data, "exit") == 0)
+            {
+                exit(0);
+            }
+
+            printf("Client said: %s\n", t->chat_info.data);
+        }
+    }
+
+    free(buffer_recv);
+    return NULL;
 }
 
 int main()
@@ -100,58 +201,34 @@ int main()
 
     freeaddrinfo(addressinfo);
 
-    char *input = malloc(10);
+    pthread_t input_thread;
+    pthread_t recv_thread;
 
-    for (;;)
+    struct thread_data t_data = {.sockfd = sockfd, .running = 1};
+    pthread_mutex_init(&t_data.mutex, NULL);
+
+    if (pthread_create(&input_thread, NULL, send_msg, (void *)&t_data) != 0)
     {
-        if (get_input(input) == -1)
-        {
-            printf("ERRRRR");
-        }
-
-        struct chat_data chat_info = {.length = strlen(input) + 1, .data = input};
-
-        printf("char length: %d\n", chat_info.length);
-
-        size_t struct_size = sizeof(uint16_t) + chat_info.length;
-
-        char *buffer_send = malloc(struct_size);
-
-        serialize_struct(&chat_info, buffer_send);
-
-        sendall(sockfd, buffer_send, struct_size, 0);
-
-        int nbytes = 0;
-        uint16_t length = 0;
-        char *buffer_recv = malloc(struct_size);
-
-        nbytes = recvall(sockfd, &length, sizeof(uint16_t), 0);
-        memcpy(buffer_recv, &length, sizeof(length));
-        nbytes = recvall(sockfd, buffer_recv + sizeof(uint16_t), length, 0);
-
-        if (nbytes <= 0)
-        {
-            if (nbytes == 0)
-            {
-                printf("Connection with server closed\n");
-                break;
-            }
-
-            else
-            {
-                perror("recv");
-            }
-        }
-
-        else
-        {
-            memset(&chat_info, 0, sizeof(struct chat_data));
-            deserialize_struct(&chat_info, buffer_recv);
-
-            printf("Client on socket %d said: %s\n", sockfd, chat_info.data);
-        }
-
-        free(buffer_send);
-        free(buffer_recv);
+        perror("Thread Create");
+        return 1;
     }
+
+    if (pthread_create(&recv_thread, NULL, recv_msg, (void *)&t_data) != 0)
+    {
+        perror("Thread Create");
+        return 1;
+    }
+
+    if (pthread_join(input_thread, NULL) != 0)
+    {
+        perror("Thread Join");
+    }
+
+    if (pthread_join(recv_thread, NULL) != 0)
+    {
+        perror("Thread Join");
+    }
+
+    pthread_mutex_destroy(&t_data.mutex);
+    close(sockfd);
 }

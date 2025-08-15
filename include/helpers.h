@@ -5,7 +5,8 @@
 
 #define PORT "9035"
 #define MAX_QUEUE 10
-#define MAX_TEXT_LENGTH 256
+#define MAX_NAME_LENGTH 15
+#define MAX_TEXT_LENGTH 65536
 
 struct chat_data
 {
