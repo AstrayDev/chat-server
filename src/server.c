@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <signal.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <errno.h>
@@ -70,7 +72,7 @@ int init_listener()
     return listener;
 }
 
-void handle_new_connection(int listener, uint8_t *poll_size, uint8_t *fd_count, struct pollfd **fds)
+void handle_new_connection(int listener, uint8_t *poll_size, int *fd_count, struct pollfd **fds)
 {
     struct sockaddr_storage client;
     socklen_t client_len = sizeof(client);
@@ -102,21 +104,23 @@ void handle_new_connection(int listener, uint8_t *poll_size, uint8_t *fd_count, 
     }
 }
 
-void handle_client_data(int listener, struct pollfd *fds, uint8_t *fd_index, uint8_t *fd_count)
+void handle_client_data(int listener, struct pollfd *fds, int *fd_index, int *fd_count)
 {
     int nbytes = 0;
     uint16_t length = 0;
+    uint16_t net_length = 0;
 
-    nbytes = recvall(fds[*fd_index].fd, &length, sizeof(uint16_t), 0);
+    nbytes = recvall(fds[*fd_index].fd, &length, sizeof(length), 0);
     length = ntohs(length);
 
-    size_t struct_size = sizeof(uint16_t) + length;
+    size_t struct_size = sizeof(length) + MAX_NAME_LENGTH + length;
     char *buffer = malloc(struct_size);
+    net_length = htons(length);
 
-    memcpy(buffer, &length, sizeof(uint16_t));
-    nbytes = recvall(fds[*fd_index].fd, buffer + sizeof(uint16_t), length, 0);
+    memcpy(buffer, &net_length, sizeof(length));
+    nbytes = recvall(fds[*fd_index].fd, buffer + sizeof(length), MAX_NAME_LENGTH + length, 0);
 
-    if (nbytes <= 1)
+    if (nbytes < 1)
     {
         if (nbytes == 0)
         {
@@ -145,13 +149,15 @@ void handle_client_data(int listener, struct pollfd *fds, uint8_t *fd_index, uin
                 sendall(fds[i].fd, buffer, struct_size, 0);
             }
         }
-        printf("Client said: %s\n", buffer + sizeof(uint16_t));
+        printf("%s said: %s\n", buffer + sizeof(uint16_t), buffer + sizeof(length) + MAX_NAME_LENGTH);
     }
+
+    free(buffer);
 }
 
-void handle_connections(int listener, uint8_t *poll_size, uint8_t *fd_count, struct pollfd **fds)
+void handle_connections(int listener, uint8_t *poll_size, int *fd_count, struct pollfd **fds)
 {
-    for (uint8_t i = 0; i < *fd_count; i++)
+    for (int i = 0; i < *fd_count; i++)
     {
         if ((*fds)[i].revents & POLLIN)
         {
@@ -168,9 +174,20 @@ void handle_connections(int listener, uint8_t *poll_size, uint8_t *fd_count, str
     }
 }
 
+bool keep_running = 1;
+
+void intHandler(int)
+{
+    keep_running = 0;
+}
+
 int main()
 {
-    uint8_t fd_count = 0;
+    struct sigaction act;
+    act.sa_handler = intHandler;
+    sigaction(SIGINT, &act, NULL);
+
+    int fd_count = 0;
     uint8_t poll_size = 10;
     struct pollfd *fds = malloc(sizeof(*fds) * poll_size);
 
@@ -187,16 +204,22 @@ int main()
 
     fd_count++;
 
-    for (;;)
+    while (keep_running)
     {
         int poll_count = poll(fds, fd_count, -1);
 
         if (poll_count == -1)
         {
+            if (errno == EINTR)
+            {
+                continue;
+            }
             perror("poll");
-            exit(1);
+            break;
         }
 
         handle_connections(listener, &poll_size, &fd_count, &fds);
     }
+    puts("Exited via SIGINT");
+    free(fds);
 }

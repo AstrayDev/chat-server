@@ -11,6 +11,7 @@
 struct chat_data
 {
     uint16_t length;
+    char name[MAX_NAME_LENGTH];
     char *data;
 };
 

@@ -10,12 +10,13 @@
 #include "helpers.h"
 #include "serialize.h"
 
-struct thread_data
+struct client_data
 {
     int sockfd;
     pthread_mutex_t mutex;
     volatile sig_atomic_t running;
     struct chat_data chat_info;
+    char client_name[MAX_NAME_LENGTH];
 };
 
 int get_input(char **input)
@@ -53,12 +54,12 @@ int get_input(char **input)
     return 0;
 }
 
-void *send_msg(void *td)
+void *send_msg(void *cd)
 {
-    struct thread_data *t = (struct thread_data *)td;
+    struct client_data *c_data = (struct client_data *)cd;
     char *input = malloc(10);
 
-    while (t->running)
+    while (c_data->running)
     {
         if (get_input(&input) < 0)
         {
@@ -67,19 +68,21 @@ void *send_msg(void *td)
 
         if (strcmp(input, "exit") == 0)
         {
-            t->running = 0;
+            c_data->running = 0;
+            shutdown(c_data->sockfd, SHUT_RDWR);
             free(input);
             pthread_exit(NULL);
         }
 
-        pthread_mutex_lock(&t->mutex);
+        pthread_mutex_lock(&c_data->mutex);
 
-        t->chat_info.length = strlen(input) + 1;
-        t->chat_info.data = input;
+        c_data->chat_info.length = strlen(input) + 1;
+        strcpy(c_data->chat_info.name, c_data->client_name);
+        c_data->chat_info.data = input;
 
-        pthread_mutex_unlock(&t->mutex);
+        pthread_mutex_unlock(&c_data->mutex);
 
-        size_t struct_size = sizeof(uint16_t) + t->chat_info.length;
+        size_t struct_size = sizeof(uint16_t) + MAX_NAME_LENGTH + c_data->chat_info.length;
 
         char *buffer_send = malloc(struct_size);
         if (!buffer_send)
@@ -89,30 +92,38 @@ void *send_msg(void *td)
             return NULL;
         }
 
-        serialize_struct(&t->chat_info, buffer_send);
-        sendall(t->sockfd, buffer_send, struct_size, 0);
+        serialize_struct(&c_data->chat_info, buffer_send);
+        sendall(c_data->sockfd, buffer_send, struct_size, 0);
 
         free(buffer_send);
     }
 
+    free(input);
     return NULL;
 }
 
-void *recv_msg(void *td)
+void *recv_msg(void *cd)
 {
-    struct thread_data *t = (struct thread_data *)td;
+    struct client_data *c_data = (struct client_data *)cd;
 
     int nbytes = 0;
     uint16_t length = 0;
 
-    size_t struct_size = sizeof(uint16_t) + t->chat_info.length;
-    char *buffer_recv = malloc(struct_size);
-
-    while (t->running)
+    while (c_data->running)
     {
-        nbytes = recvall(t->sockfd, &length, sizeof(uint16_t), 0);
+        size_t offset = 0;
+        
+        nbytes = recvall(c_data->sockfd, &length, sizeof(uint16_t), 0);
+        length = ntohs(length);
+
+        size_t struct_size = sizeof(uint16_t) + MAX_NAME_LENGTH + length;
+        char *buffer_recv = malloc(struct_size);
+        
         memcpy(buffer_recv, &length, sizeof(length));
-        nbytes = recvall(t->sockfd, buffer_recv + sizeof(uint16_t), length, 0);
+        offset += sizeof(length);
+        nbytes = recvall(c_data->sockfd, buffer_recv + offset, MAX_NAME_LENGTH, 0);
+        offset += MAX_NAME_LENGTH;
+        nbytes = recvall(c_data->sockfd, buffer_recv + offset, length, 0);
 
         if (nbytes <= 0)
         {
@@ -131,23 +142,19 @@ void *recv_msg(void *td)
 
         else
         {
-            pthread_mutex_lock(&t->mutex);
+            pthread_mutex_lock(&c_data->mutex);
 
-            memset(&t->chat_info, 0, sizeof(struct chat_data));
-            deserialize_struct(&t->chat_info, buffer_recv);
+            memset(&c_data->chat_info, 0, sizeof(struct chat_data));
+            deserialize_struct(&c_data->chat_info, buffer_recv);
 
-            pthread_mutex_unlock(&t->mutex);
+            pthread_mutex_unlock(&c_data->mutex);
 
-            if (strcmp(t->chat_info.data, "exit") == 0)
-            {
-                exit(0);
-            }
-
-            printf("Client said: %s\n", t->chat_info.data);
+            printf("%s said: %s\n", c_data->chat_info.name, c_data->chat_info.data);
         }
+        free(buffer_recv);
+        free(c_data->chat_info.data);
     }
 
-    free(buffer_recv);
     return NULL;
 }
 
@@ -204,16 +211,23 @@ int main()
     pthread_t input_thread;
     pthread_t recv_thread;
 
-    struct thread_data t_data = {.sockfd = sockfd, .running = 1};
-    pthread_mutex_init(&t_data.mutex, NULL);
+    struct client_data c_data = {.sockfd = sockfd, .running = 1};
+    pthread_mutex_init(&c_data.mutex, NULL);
 
-    if (pthread_create(&input_thread, NULL, send_msg, (void *)&t_data) != 0)
+    puts("Welcome to the chat room! Enter 'exit' to leave\nWhats your name?");
+    char *name = malloc(MAX_NAME_LENGTH);
+
+    get_input(&name);
+    strcpy(c_data.client_name, name);
+    free(name);
+
+    if (pthread_create(&input_thread, NULL, send_msg, (void *)&c_data) != 0)
     {
         perror("Thread Create");
         return 1;
     }
 
-    if (pthread_create(&recv_thread, NULL, recv_msg, (void *)&t_data) != 0)
+    if (pthread_create(&recv_thread, NULL, recv_msg, (void *)&c_data) != 0)
     {
         perror("Thread Create");
         return 1;
@@ -229,6 +243,6 @@ int main()
         perror("Thread Join");
     }
 
-    pthread_mutex_destroy(&t_data.mutex);
+    pthread_mutex_destroy(&c_data.mutex);
     close(sockfd);
 }

@@ -15,7 +15,7 @@ int main()
     }
 
     char message[5] = "hello";
-    int message_len = sizeof(message) + 1;
+    size_t message_len = sizeof(message) + 1;
 
     int sent = 0, recv = 0;
 
